@@ -35,4 +35,4 @@ jobs:
           remote_host: ${{ secrets.HOSTINGER_HOST }}
           remote_user: ${{ secrets.HOSTINGER_USER }}
           remote_key: ${{ secrets.HOSTINGER_SSH_KEY }}
-          remote_port: ${{ secrets.HOSTINGER_PORT }}
+          remote_port: 22
