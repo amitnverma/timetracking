@@ -147,10 +147,19 @@ SSH_WRAP="$(mktemp)"
 chmod 700 "$SSH_WRAP"
 trap 'rm -f "$SSH_WRAP"' EXIT
 
-ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" "mkdir -p '${ALLOWED_PATH}'"
+ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" bash -s <<REMOTE
+set -euo pipefail
+ALLOWED="${ALLOWED_PATH}"
+mkdir -p "\$ALLOWED/api" "\$ALLOWED/assets/css" "\$ALLOWED/assets/js" "\$ALLOWED/config" "\$ALLOWED/sql" "\$ALLOWED/scripts"
+chmod -R u+rwX "\$ALLOWED" 2>/dev/null || true
+echo "PREFLIGHT_OK \$(pwd) user=\$(id -un) path=\$ALLOWED"
+REMOTE
 
 echo "Rsync → ${USER}@${HOST}:${ALLOWED_PATH}/"
-rsync -avz --delete \
+# Hostinger rsync is often older; avoid permission/owner sync which causes exit 23.
+set +e
+rsync -rltvz --protocol=29 --delete \
+  --no-owner --no-group --no-perms --omit-dir-times \
   --exclude '.git/' \
   --exclude '.github/' \
   --exclude '.gitignore' \
@@ -159,5 +168,27 @@ rsync -avz --delete \
   --exclude 'config/db.local.php.example' \
   -e "$SSH_WRAP" \
   "${ROOT}/" "${USER}@${HOST}:${ALLOWED_PATH}/"
+rc=$?
+set -e
+# 0 = ok, 23/24 sometimes still copied app files with harmless attribute warnings
+if [[ "$rc" -eq 0 || "$rc" -eq 23 || "$rc" -eq 24 ]]; then
+  echo "Rsync finished with code ${rc}"
+else
+  echo "::error::Rsync failed with exit code ${rc}"
+  exit "$rc"
+fi
+
+# Verify critical files landed
+ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" bash -s <<REMOTE
+set -euo pipefail
+ALLOWED="${ALLOWED_PATH}"
+for f in index.html api/entries.php api/db-config.php assets/js/app.js assets/css/app.css; do
+  if [[ ! -f "\$ALLOWED/\$f" ]]; then
+    echo "Missing after deploy: \$ALLOWED/\$f"
+    exit 1
+  fi
+done
+echo "Verify OK"
+REMOTE
 
 echo "Deployed to ${ALLOWED_PATH}/ only (SSH port ${PORT})."
