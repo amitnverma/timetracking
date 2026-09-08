@@ -1,11 +1,17 @@
 <?php
 /**
  * Database connection for Time Tracking.
+ * Optional override: create config/db.local.php on the server (not in git)
+ * to set $host, $db, $user, $pass for production without changing this file.
  */
 $host = 'localhost';
 $db   = 'timetracking';
 $user = 'root';
 $pass = '';
+
+if (is_readable(__DIR__ . '/db.local.php')) {
+    require __DIR__ . '/db.local.php';
+}
 
 $conn = new mysqli($host, $user, $pass, $db);
 if ($conn->connect_error) {

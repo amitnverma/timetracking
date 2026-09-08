@@ -1,0 +1,10 @@
+<?php
+/**
+ * Production / Hostinger DB credentials.
+ * Copy to db.local.php on the server and fill in values.
+ * This example file is safe to commit; db.local.php is gitignored and not deployed over.
+ */
+$host = 'localhost';
+$db   = 'timetracking';
+$user = 'YOUR_DB_USER';
+$pass = 'YOUR_DB_PASSWORD';
