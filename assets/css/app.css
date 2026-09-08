@@ -671,6 +671,45 @@ textarea {
   max-width: 860px;
 }
 
+.db-settings {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.db-settings .toolbar {
+  margin-bottom: 0.85rem;
+  align-items: baseline;
+}
+
+.db-status {
+  margin: 0;
+}
+
+.db-status.is-ok {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.db-status.is-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.db-actions {
+  margin-top: 0.85rem;
+  margin-left: 0;
+}
+
+.modal-dialog-wide {
+  width: min(480px, 100%);
+}
+
+.error-text {
+  color: var(--danger) !important;
+  font-weight: 600;
+}
+
 .toast {
   position: fixed;
   top: 1rem;

@@ -5,6 +5,7 @@
     projects: 'api/projects.php',
     entries: 'api/entries.php',
     settings: 'api/settings.php',
+    dbConfig: 'api/db-config.php',
   };
 
   const state = {
@@ -182,7 +183,10 @@
     });
     if (name === 'history') refreshHistory();
     if (name === 'projects') renderProjectsTable();
-    if (name === 'settings') fillSettingsForm();
+    if (name === 'settings') {
+      fillSettingsForm();
+      loadDbConfigForm();
+    }
   }
 
   // --- Projects select helpers ---
@@ -950,6 +954,166 @@
     }
   }
 
+  // --- Database credentials UI ---
+
+  async function fetchDbConfig() {
+    const res = await fetch(API.dbConfig, { headers: { Accept: 'application/json' } });
+    const data = await res.json();
+    if (!data || data.ok === false) {
+      throw new Error((data && data.error) || 'Could not load DB config');
+    }
+    return data;
+  }
+
+  function setDbStatus(el, data) {
+    if (!el) return;
+    if (data.connected) {
+      el.textContent = data.tables_ready
+        ? `Connected to ${data.config.db} @ ${data.config.host}`
+        : `Connected, but tables missing — check “Create / update tables”`;
+      el.className = 'hint db-status is-ok';
+    } else {
+      el.textContent = data.error
+        ? `Not connected: ${data.error}`
+        : 'Not connected';
+      el.className = 'hint db-status is-bad';
+    }
+  }
+
+  async function loadDbConfigForm() {
+    try {
+      const data = await fetchDbConfig();
+      $('#db-host').value = data.config.host || 'localhost';
+      $('#db-name').value = data.config.db || '';
+      $('#db-user').value = data.config.user || '';
+      $('#db-pass').value = '';
+      $('#db-pass').placeholder = data.config.has_password
+        ? 'Leave blank to keep current password'
+        : 'Database password';
+      setDbStatus($('#db-status'), data);
+    } catch (err) {
+      const el = $('#db-status');
+      el.textContent = err.message;
+      el.className = 'hint db-status is-bad';
+    }
+  }
+
+  function readDbForm(prefix) {
+    return {
+      host: $(`#${prefix}host`).value.trim(),
+      db: $(`#${prefix}name`).value.trim(),
+      user: $(`#${prefix}user`).value.trim(),
+      pass: $(`#${prefix}pass`).value,
+    };
+  }
+
+  async function postDbConfig(payload) {
+    const res = await fetch(API.dbConfig, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) {
+      throw new Error((data && data.error) || 'Save failed');
+    }
+    return data;
+  }
+
+  async function testDbFromSettings() {
+    const form = readDbForm('db-');
+    try {
+      await postDbConfig({
+        ...form,
+        keep_password: form.pass === '',
+        test_only: true,
+      });
+      toast('Connection successful');
+      $('#db-status').textContent = `Test OK — ${form.db} @ ${form.host}`;
+      $('#db-status').className = 'hint db-status is-ok';
+    } catch (err) {
+      toast(err.message, 'error');
+      $('#db-status').textContent = err.message;
+      $('#db-status').className = 'hint db-status is-bad';
+    }
+  }
+
+  async function saveDbFromSettings() {
+    const form = readDbForm('db-');
+    try {
+      const data = await postDbConfig({
+        ...form,
+        keep_password: form.pass === '',
+        install_schema: $('#db-install-schema').checked,
+      });
+      toast(data.message || 'Database credentials saved');
+      setDbStatus($('#db-status'), data);
+      $('#db-pass').value = '';
+      $('#db-pass').placeholder = 'Leave blank to keep current password';
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function showDbSetupOverlay(prefill) {
+    const overlay = $('#db-setup-overlay');
+    if (prefill && prefill.config) {
+      $('#setup-db-host').value = prefill.config.host || 'localhost';
+      $('#setup-db-name').value = prefill.config.db || '';
+      $('#setup-db-user').value = prefill.config.user || '';
+    }
+    $('#db-setup-error').hidden = true;
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideDbSetupOverlay() {
+    const overlay = $('#db-setup-overlay');
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+
+  async function testDbFromSetup() {
+    const form = {
+      host: $('#setup-db-host').value.trim(),
+      db: $('#setup-db-name').value.trim(),
+      user: $('#setup-db-user').value.trim(),
+      pass: $('#setup-db-pass').value,
+    };
+    const errEl = $('#db-setup-error');
+    try {
+      await postDbConfig({ ...form, test_only: true });
+      errEl.hidden = true;
+      toast('Connection successful');
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.hidden = false;
+    }
+  }
+
+  async function saveDbFromSetup(e) {
+    e.preventDefault();
+    const form = {
+      host: $('#setup-db-host').value.trim(),
+      db: $('#setup-db-name').value.trim(),
+      user: $('#setup-db-user').value.trim(),
+      pass: $('#setup-db-pass').value,
+    };
+    const errEl = $('#db-setup-error');
+    try {
+      const data = await postDbConfig({
+        ...form,
+        install_schema: $('#setup-db-install').checked,
+      });
+      hideDbSetupOverlay();
+      toast(data.message || 'Database saved');
+      window.location.reload();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.hidden = false;
+    }
+  }
+
   // --- Excel CSV import / export ---
 
   const EXPORT_HEADERS = ['work_date', 'project_code', 'project_name', 'hours', 'notes'];
@@ -1278,6 +1442,14 @@
     $('#settings-save').addEventListener('click', saveSettings);
     $('#settings-form').addEventListener('submit', saveSettings);
     $('#entry-form').addEventListener('submit', updateEntry);
+    $('#db-test').addEventListener('click', testDbFromSettings);
+    $('#db-save').addEventListener('click', saveDbFromSettings);
+    $('#db-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveDbFromSettings();
+    });
+    $('#setup-db-test').addEventListener('click', testDbFromSetup);
+    $('#db-setup-form').addEventListener('submit', saveDbFromSetup);
 
     $$('[data-close-modal]').forEach((el) => {
       el.addEventListener('click', () => closeModal(el));
@@ -1293,6 +1465,11 @@
   async function init() {
     bindEvents();
     try {
+      const dbInfo = await fetchDbConfig();
+      if (!dbInfo.connected || !dbInfo.tables_ready) {
+        showDbSetupOverlay(dbInfo);
+        return;
+      }
       await loadSettings();
       await loadProjects();
       applyThisWeek('enter');
@@ -1307,7 +1484,13 @@
       }
       await refreshHistory();
     } catch (err) {
-      toast(err.message + ' — Import sql/schema.sql in phpMyAdmin if the database is missing.', 'error');
+      try {
+        const dbInfo = await fetchDbConfig();
+        showDbSetupOverlay(dbInfo);
+      } catch (_) {
+        showDbSetupOverlay(null);
+      }
+      toast(err.message, 'error');
     }
   }
 
