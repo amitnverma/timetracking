@@ -1,0 +1,20 @@
+# Force PHP execution (LiteSpeed / Apache on Hostinger)
+<IfModule mod_mime.c>
+  AddType application/x-httpd-php .php
+</IfModule>
+
+<IfModule liteSpeed>
+  AddType application/x-httpd-php .php
+</IfModule>
+
+DirectoryIndex index.html index.php
+
+# Do not allow directory listings
+Options -Indexes
+
+# Ensure PHP files are not served as downloads/static when possible
+<FilesMatch "\.php$">
+  <IfModule mod_authz_core.c>
+    Require all granted
+  </IfModule>
+</FilesMatch>

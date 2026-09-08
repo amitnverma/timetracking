@@ -959,6 +959,12 @@
 
   async function parseJsonResponse(res) {
     const text = await res.text();
+    const trimmed = text.trim();
+    if (trimmed.startsWith('<?php') || trimmed.startsWith('<?PHP')) {
+      throw new Error(
+        'PHP is not executing on Hostinger (server returned PHP source). In hPanel open Websites → Manage → PHP Configuration and set PHP 8.1 or 8.2 for cloudmosaic.ai, then reopen https://cloudmosaic.ai/time/hello.php'
+      );
+    }
     try {
       return JSON.parse(text);
     } catch (e) {
