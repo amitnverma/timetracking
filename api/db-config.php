@@ -128,6 +128,29 @@ function dbcfg_install_schema(mysqli $conn) {
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
+$action = '';
+if ($method === 'GET' && isset($_GET['action'])) {
+    $action = trim((string) $_GET['action']);
+}
+
+// Hostinger/nginx often returns HTTP 405 for POST to some PHP paths.
+// Support test/save via GET ?action=test|save as a compatible fallback.
+if ($method === 'GET' && ($action === 'test' || $action === 'save')) {
+    $body = [
+        'host' => $_GET['host'] ?? null,
+        'db' => $_GET['db'] ?? null,
+        'user' => $_GET['user'] ?? null,
+        'pass' => $_GET['pass'] ?? null,
+        'keep_password' => $_GET['keep_password'] ?? null,
+        'install_schema' => $_GET['install_schema'] ?? null,
+        'test_only' => $action === 'test' ? '1' : null,
+    ];
+    // Reuse POST logic below by faking method handling
+    $method = 'POST';
+    $_POST = array_filter($body, function ($v) {
+        return $v !== null;
+    });
+}
 
 if ($method === 'GET') {
     list($cfg, $hasLocal) = dbcfg_read_local();
@@ -155,6 +178,10 @@ if ($method === 'GET') {
 
 if ($method === 'POST' || $method === 'PUT') {
     $body = dbcfg_body();
+    // Merge GET-fallback params stored into $_POST above
+    if (empty($body) && !empty($_POST)) {
+        $body = $_POST;
+    }
     list($existing, $hasLocal) = dbcfg_read_local();
 
     $host = trim((string) ($body['host'] ?? $existing['host']));

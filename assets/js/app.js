@@ -5,7 +5,8 @@
     projects: 'api/projects.php',
     entries: 'api/entries.php',
     settings: 'api/settings.php',
-    dbConfig: 'api/db-config.php',
+    dbConfig: 'db-setup.php',
+    dbConfigApi: 'api/db-config.php',
   };
 
   const state = {
@@ -956,17 +957,20 @@
 
   // --- Database credentials UI ---
 
-  async function fetchDbConfig() {
-    const res = await fetch(API.dbConfig, { headers: { Accept: 'application/json' } });
+  async function parseJsonResponse(res) {
     const text = await res.text();
-    let data;
     try {
-      data = JSON.parse(text);
+      return JSON.parse(text);
     } catch (e) {
       throw new Error(
-        `API did not return JSON (HTTP ${res.status}). Often file permissions on Hostinger. Response starts: ${text.slice(0, 80)}`
+        `API did not return JSON (HTTP ${res.status}). Response: ${text.slice(0, 120)}`
       );
     }
+  }
+
+  async function fetchDbConfig() {
+    const res = await fetch(API.dbConfig, { headers: { Accept: 'application/json' } });
+    const data = await parseJsonResponse(res);
     if (!data || data.ok === false) {
       throw new Error((data && data.error) || 'Could not load DB config');
     }
@@ -1016,20 +1020,21 @@
   }
 
   async function postDbConfig(payload) {
-    const res = await fetch(API.dbConfig, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const text = await res.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error(
-        `API did not return JSON (HTTP ${res.status}). Fix file permissions on the server (chmod 644 PHP files). Response: ${text.slice(0, 120)}`
-      );
-    }
+    // Prefer GET action= on Hostinger: nginx often returns 405 for POST to PHP under /api/
+    const action = payload.test_only ? 'test' : 'save';
+    const params = new URLSearchParams();
+    params.set('action', action);
+    if (payload.host != null) params.set('host', payload.host);
+    if (payload.db != null) params.set('db', payload.db);
+    if (payload.user != null) params.set('user', payload.user);
+    if (payload.pass != null && payload.pass !== '') params.set('pass', payload.pass);
+    if (payload.keep_password) params.set('keep_password', '1');
+    if (payload.install_schema) params.set('install_schema', '1');
+    if (payload.test_only) params.set('test_only', '1');
+
+    const url = `${API.dbConfig}?${params.toString()}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const data = await parseJsonResponse(res);
     if (!res.ok || data.ok === false) {
       throw new Error((data && data.error) || 'Save failed');
     }
