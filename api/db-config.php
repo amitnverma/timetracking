@@ -105,9 +105,12 @@ function dbcfg_try_connect(array $cfg) {
 }
 
 function dbcfg_install_schema(mysqli $conn) {
-    $sqlFile = dirname(__DIR__) . '/sql/schema.sql';
+    $sqlFile = dirname(__DIR__) . '/sql/tables-only.sql';
     if (!is_readable($sqlFile)) {
-        return 'sql/schema.sql not found on server';
+        $sqlFile = dirname(__DIR__) . '/sql/schema.sql';
+    }
+    if (!is_readable($sqlFile)) {
+        return 'sql/tables-only.sql (or schema.sql) not found on server';
     }
     $sql = file_get_contents($sqlFile);
     // When DB already selected, strip CREATE DATABASE / USE lines

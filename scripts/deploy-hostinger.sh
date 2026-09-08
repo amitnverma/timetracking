@@ -182,7 +182,7 @@ fi
 ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" bash -s <<REMOTE
 set -euo pipefail
 ALLOWED="${ALLOWED_PATH}"
-for f in index.html api/entries.php api/db-config.php assets/js/app.js assets/css/app.css; do
+for f in index.html hello.php db-setup.php api/entries.php api/db-config.php assets/js/app.js assets/css/app.css sql/tables-only.sql scripts/enable-php-for-time.sh; do
   if [[ ! -f "\$ALLOWED/\$f" ]]; then
     echo "Missing after deploy: \$ALLOWED/\$f"
     exit 1
@@ -191,8 +191,18 @@ done
 # Hostinger PHP needs world-readable files; rsync --no-perms can leave 600s → HTML 403
 find "\$ALLOWED" -type d -exec chmod 755 {} \;
 find "\$ALLOWED" -type f -exec chmod 644 {} \;
-chmod 755 "\$ALLOWED/api" "\$ALLOWED/config" 2>/dev/null || true
+chmod 755 "\$ALLOWED/api" "\$ALLOWED/config" "\$ALLOWED/scripts" 2>/dev/null || true
+chmod 755 "\$ALLOWED/scripts/enable-php-for-time.sh" "\$ALLOWED/scripts/deploy-hostinger.sh" 2>/dev/null || true
 echo "Verify OK + permissions fixed"
+# Soft PHP health hint (does not fail deploy — nginx may still need enable-php-for-time.sh)
+if command -v curl >/dev/null 2>&1; then
+  body="\$(curl -fsS --max-time 8 https://cloudmosaic.ai/time/hello.php 2>/dev/null || true)"
+  if printf '%s' "\$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+    echo "PHP health: OK"
+  else
+    echo "PHP health: NOT executing yet. On VPS run: sudo bash \$ALLOWED/scripts/enable-php-for-time.sh"
+  fi
+fi
 REMOTE
 
 echo "Deployed to ${ALLOWED_PATH}/ only (SSH port ${PORT})."

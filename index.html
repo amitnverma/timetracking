@@ -265,12 +265,45 @@
     </section>
   </div>
 
-  <!-- DB setup overlay (shown when app cannot connect) -->
+  <!-- PHP not executing (nginx serving source) — must fix before DB setup -->
+  <div id="php-setup-overlay" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-dialog-wide" role="dialog" aria-labelledby="php-setup-title">
+      <h3 id="php-setup-title">PHP is not running for /time</h3>
+      <p class="hint" id="php-setup-summary">
+        This Hostinger site is on nginx and is serving <code>.php</code> files as downloads instead of executing them.
+        Database setup cannot continue until PHP works. Changes stay under the <code>time</code> folder only.
+      </p>
+      <ol class="setup-steps">
+        <li>In <strong>CloudPanel</strong> (Hostinger VPS): Sites → <code>cloudmosaic.ai</code> → Vhost / Nginx → <strong>Additional Nginx Directives</strong>.</li>
+        <li>Paste the contents of <code>scripts/nginx-time-php.snippet.conf</code> from this folder, save, and reload nginx.</li>
+        <li>Or SSH as root and run:
+          <code class="setup-code">sudo bash /home/cloudmosaicaissh/htdocs/cloudmosaic.ai/time/scripts/enable-php-for-time.sh</code>
+        </li>
+        <li>Open <a href="hello.php" target="_blank" rel="noopener">hello.php</a> — you must see JSON (<code>ok: true</code>), not PHP source.</li>
+        <li>Click Recheck below, then connect the database.</li>
+      </ol>
+      <p class="hint">
+        Alternate: CloudPanel → Add Site → PHP site on subdomain <code>time.cloudmosaic.ai</code> with root set to this same <code>time</code> folder.
+      </p>
+      <p class="hint">
+        Tables alternate (once a MySQL DB exists): in phpMyAdmin select your DB → Import →
+        <code>sql/tables-only.sql</code>, then enter credentials here with “Create tables” unchecked.
+      </p>
+      <p class="hint error-text" id="php-setup-error" hidden></p>
+      <div class="modal-actions">
+        <a class="btn btn-ghost" href="hello.php" target="_blank" rel="noopener">Open hello.php</a>
+        <button type="button" class="btn btn-primary" id="php-setup-recheck">Recheck PHP</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DB setup overlay (shown when PHP works but DB is not ready) -->
   <div id="db-setup-overlay" class="modal hidden" aria-hidden="true">
     <div class="modal-backdrop"></div>
     <div class="modal-dialog modal-dialog-wide" role="dialog" aria-labelledby="db-setup-title">
       <h3 id="db-setup-title">Connect your database</h3>
-      <p class="hint">Enter the Hostinger database details you created. No SSH commands needed.</p>
+      <p class="hint">Enter the Hostinger MySQL details for this app. Host is usually <code>localhost</code>.</p>
       <form id="db-setup-form">
         <div class="field-group">
           <label for="setup-db-host">Host</label>
@@ -294,6 +327,7 @@
             Create tables now
           </label>
         </div>
+        <p class="hint">If you already imported <code>sql/tables-only.sql</code> in phpMyAdmin, uncheck “Create tables now”.</p>
         <p class="hint error-text" id="db-setup-error" hidden></p>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="setup-db-test">Test</button>

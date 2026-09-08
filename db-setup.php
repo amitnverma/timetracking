@@ -75,9 +75,13 @@ function try_connect($cfg) {
 }
 
 function install_schema($conn) {
-    $sqlFile = __DIR__ . '/sql/schema.sql';
+    // Prefer tables-only (no CREATE DATABASE) for Hostinger named DBs.
+    $sqlFile = __DIR__ . '/sql/tables-only.sql';
     if (!is_readable($sqlFile)) {
-        return 'sql/schema.sql missing';
+        $sqlFile = __DIR__ . '/sql/schema.sql';
+    }
+    if (!is_readable($sqlFile)) {
+        return 'sql/tables-only.sql (or schema.sql) missing';
     }
     $sql = file_get_contents($sqlFile);
     $sql = preg_replace('/^\s*CREATE\s+DATABASE\b.*?;\s*/im', '', $sql);
@@ -93,6 +97,37 @@ function install_schema($conn) {
 }
 
 $action = isset($_GET['action']) ? trim($_GET['action']) : '';
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+// Prefer POST JSON (keeps passwords out of access logs). Also accept form POST.
+if ($method === 'POST' || $method === 'PUT') {
+    $raw = file_get_contents('php://input');
+    $body = [];
+    if ($raw !== false && $raw !== '') {
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            $body = $decoded;
+        }
+    }
+    if (!$body && !empty($_POST)) {
+        $body = $_POST;
+    }
+    if ($action === '' && !empty($body['action'])) {
+        $action = trim((string) $body['action']);
+    }
+    if ($action === '' && !empty($body['test_only'])) {
+        $action = 'test';
+    }
+    if ($action === '' && (isset($body['host']) || isset($body['db']))) {
+        $action = 'save';
+    }
+    // Expose body fields via $_GET-compatible keys for shared handler below
+    foreach (['host', 'db', 'user', 'pass', 'keep_password', 'install_schema', 'test_only'] as $key) {
+        if (array_key_exists($key, $body)) {
+            $_GET[$key] = $body[$key];
+        }
+    }
+}
 
 if ($action === '' || $action === 'status') {
     list($cfg, $hasLocal) = read_local();

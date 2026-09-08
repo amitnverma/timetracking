@@ -7,7 +7,11 @@
     settings: 'api/settings.php',
     dbConfig: 'db-setup.php',
     dbConfigApi: 'api/db-config.php',
+    phpHello: 'hello.php',
   };
+
+  const PHP_NOT_RUNNING_MSG =
+    'PHP is not executing under /time (nginx returned PHP source). In CloudPanel add scripts/nginx-time-php.snippet.conf under Sites → cloudmosaic.ai → Vhost/Nginx, or run scripts/enable-php-for-time.sh as root — then open hello.php and Recheck.';
 
   const state = {
     settings: {},
@@ -22,6 +26,11 @@
 
   // --- Utilities ---
 
+  function looksLikePhpSource(text) {
+    const trimmed = (text || '').trim();
+    return trimmed.startsWith('<?php') || trimmed.startsWith('<?PHP') || trimmed.startsWith('<?=');
+  }
+
   async function api(url, options = {}) {
     const opts = { ...options };
     opts.headers = {
@@ -30,11 +39,15 @@
       ...opts.headers,
     };
     const res = await fetch(url, opts);
+    const text = await res.text();
+    if (looksLikePhpSource(text)) {
+      throw new Error(PHP_NOT_RUNNING_MSG);
+    }
     let data;
     try {
-      data = await res.json();
+      data = JSON.parse(text);
     } catch (e) {
-      throw new Error('Invalid server response');
+      throw new Error(`Invalid server response (HTTP ${res.status})`);
     }
     if (!res.ok || data.ok === false) {
       throw new Error(data.error || `Request failed (${res.status})`);
@@ -959,11 +972,10 @@
 
   async function parseJsonResponse(res) {
     const text = await res.text();
-    const trimmed = text.trim();
-    if (trimmed.startsWith('<?php') || trimmed.startsWith('<?PHP')) {
-      throw new Error(
-        'PHP is not executing on Hostinger (server returned PHP source). In hPanel open Websites → Manage → PHP Configuration and set PHP 8.1 or 8.2 for cloudmosaic.ai, then reopen https://cloudmosaic.ai/time/hello.php'
-      );
+    if (looksLikePhpSource(text)) {
+      const err = new Error(PHP_NOT_RUNNING_MSG);
+      err.code = 'PHP_NOT_RUNNING';
+      throw err;
     }
     try {
       return JSON.parse(text);
@@ -972,6 +984,54 @@
         `API did not return JSON (HTTP ${res.status}). Response: ${text.slice(0, 120)}`
       );
     }
+  }
+
+  async function checkPhpHealth() {
+    const res = await fetch(`${API.phpHello}?_=${Date.now()}`, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    const text = await res.text();
+    if (looksLikePhpSource(text)) {
+      return { ok: false, code: 'PHP_NOT_RUNNING', raw: text.slice(0, 80) };
+    }
+    try {
+      const data = JSON.parse(text);
+      if (data && data.ok) {
+        return {
+          ok: true,
+          php: data.php,
+          mysqli: !!data.mysqli,
+          message: data.message || 'PHP is running',
+        };
+      }
+      return { ok: false, code: 'PHP_BAD_RESPONSE', raw: text.slice(0, 120) };
+    } catch (e) {
+      return { ok: false, code: 'PHP_BAD_RESPONSE', raw: text.slice(0, 120) };
+    }
+  }
+
+  function showPhpSetupOverlay(detail) {
+    const overlay = $('#php-setup-overlay');
+    const errEl = $('#php-setup-error');
+    if (errEl) {
+      if (detail && detail.raw) {
+        errEl.textContent = `Server returned: ${detail.raw}`;
+        errEl.hidden = false;
+      } else {
+        errEl.hidden = true;
+      }
+    }
+    hideDbSetupOverlay();
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+
+  function hidePhpSetupOverlay() {
+    const overlay = $('#php-setup-overlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
   }
 
   async function fetchDbConfig() {
@@ -1026,20 +1086,39 @@
   }
 
   async function postDbConfig(payload) {
-    // Prefer GET action= on Hostinger: nginx often returns 405 for POST to PHP under /api/
     const action = payload.test_only ? 'test' : 'save';
-    const params = new URLSearchParams();
-    params.set('action', action);
-    if (payload.host != null) params.set('host', payload.host);
-    if (payload.db != null) params.set('db', payload.db);
-    if (payload.user != null) params.set('user', payload.user);
-    if (payload.pass != null && payload.pass !== '') params.set('pass', payload.pass);
-    if (payload.keep_password) params.set('keep_password', '1');
-    if (payload.install_schema) params.set('install_schema', '1');
-    if (payload.test_only) params.set('test_only', '1');
+    const body = {
+      action,
+      host: payload.host,
+      db: payload.db,
+      user: payload.user,
+    };
+    if (payload.pass != null && payload.pass !== '') body.pass = payload.pass;
+    if (payload.keep_password) body.keep_password = '1';
+    if (payload.install_schema) body.install_schema = '1';
+    if (payload.test_only) body.test_only = '1';
 
-    const url = `${API.dbConfig}?${params.toString()}`;
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    // Prefer POST so passwords are not written to nginx access logs (GET query strings are).
+    let res = await fetch(API.dbConfig, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    // Fallback for hosts that block POST to PHP: GET without preferring it first.
+    if (res.status === 405 || res.status === 501) {
+      const params = new URLSearchParams();
+      Object.entries(body).forEach(([k, v]) => {
+        if (v != null && v !== '') params.set(k, String(v));
+      });
+      res = await fetch(`${API.dbConfig}?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+    }
+
     const data = await parseJsonResponse(res);
     if (!res.ok || data.ok === false) {
       throw new Error((data && data.error) || 'Save failed');
@@ -1477,6 +1556,17 @@
     });
     $('#setup-db-test').addEventListener('click', testDbFromSetup);
     $('#db-setup-form').addEventListener('submit', saveDbFromSetup);
+    const recheckBtn = $('#php-setup-recheck');
+    if (recheckBtn) {
+      recheckBtn.addEventListener('click', async () => {
+        recheckBtn.disabled = true;
+        try {
+          await bootApp();
+        } finally {
+          recheckBtn.disabled = false;
+        }
+      });
+    }
 
     $$('[data-close-modal]').forEach((el) => {
       el.addEventListener('click', () => closeModal(el));
@@ -1489,36 +1579,62 @@
     });
   }
 
-  async function init() {
-    bindEvents();
+  async function startAfterDbReady() {
+    await loadSettings();
+    await loadProjects();
+    applyThisWeek('enter');
+    applyThisWeek('history');
+    const active = state.projects.filter((p) => p.is_active);
+    const enterSelect = $('#enter-projects');
+    $$('option', enterSelect).forEach((opt, i) => {
+      opt.selected = i < Math.min(3, active.length);
+    });
+    if (active.length) {
+      await loadEnterGrid(false);
+    }
+    await refreshHistory();
+  }
+
+  async function bootApp() {
+    const php = await checkPhpHealth();
+    if (!php.ok) {
+      showPhpSetupOverlay(php);
+      toast(PHP_NOT_RUNNING_MSG, 'error');
+      return false;
+    }
+    hidePhpSetupOverlay();
+    if (php.mysqli === false) {
+      toast('PHP is running but mysqli is missing — enable php-mysqli on the VPS', 'error');
+    }
+
     try {
       const dbInfo = await fetchDbConfig();
       if (!dbInfo.connected || !dbInfo.tables_ready) {
         showDbSetupOverlay(dbInfo);
-        return;
+        return false;
       }
-      await loadSettings();
-      await loadProjects();
-      applyThisWeek('enter');
-      applyThisWeek('history');
-      const active = state.projects.filter((p) => p.is_active);
-      const enterSelect = $('#enter-projects');
-      $$('option', enterSelect).forEach((opt, i) => {
-        opt.selected = i < Math.min(3, active.length);
-      });
-      if (active.length) {
-        await loadEnterGrid(false);
-      }
-      await refreshHistory();
+      hideDbSetupOverlay();
+      await startAfterDbReady();
+      return true;
     } catch (err) {
-      try {
-        const dbInfo = await fetchDbConfig();
-        showDbSetupOverlay(dbInfo);
-      } catch (_) {
-        showDbSetupOverlay(null);
+      if (err.code === 'PHP_NOT_RUNNING') {
+        showPhpSetupOverlay({ raw: err.message });
+      } else {
+        try {
+          const dbInfo = await fetchDbConfig();
+          showDbSetupOverlay(dbInfo);
+        } catch (_) {
+          showDbSetupOverlay(null);
+        }
       }
       toast(err.message, 'error');
+      return false;
     }
+  }
+
+  async function init() {
+    bindEvents();
+    await bootApp();
   }
 
   document.addEventListener('DOMContentLoaded', init);
