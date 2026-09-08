@@ -5,7 +5,9 @@ set -euo pipefail
 ALLOWED_USER="cloudmosaicaissh"
 ALLOWED_PATH="/home/cloudmosaicaissh/htdocs/cloudmosaic.ai/time"
 
-HOST="${HOSTINGER_HOST:?Set HOSTINGER_HOST}"
+raw_host="${HOSTINGER_HOST:?Set HOSTINGER_HOST}"
+# Sanitize common paste mistakes
+HOST="$(printf '%s' "$raw_host" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's|^https\?://||' -e 's|/.*||')"
 USER="${HOSTINGER_USER:-$ALLOWED_USER}"
 KEY_FILE="${HOSTINGER_SSH_KEY_FILE:?Set HOSTINGER_SSH_KEY_FILE}"
 
@@ -15,6 +17,10 @@ if [[ "$USER" != "$ALLOWED_USER" ]]; then
 fi
 if [[ ! -f "$KEY_FILE" ]]; then
   echo "SSH key file not found: $KEY_FILE"
+  exit 1
+fi
+if [[ -z "$HOST" ]]; then
+  echo "HOSTINGER_HOST is empty after cleanup"
   exit 1
 fi
 
@@ -34,10 +40,10 @@ ssh_base_opts() {
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o GlobalKnownHostsFile=/dev/null \
-    -o ConnectTimeout=25 \
-    -o ConnectionAttempts=3 \
-    -o ServerAliveInterval=15 \
-    -o ServerAliveCountMax=4 \
+    -o ConnectTimeout=20 \
+    -o ConnectionAttempts=2 \
+    -o ServerAliveInterval=10 \
+    -o ServerAliveCountMax=3 \
     -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 \
     -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 \
     -o KexAlgorithms=+diffie-hellman-group14-sha256,diffie-hellman-group-exchange-sha256,curve25519-sha256
@@ -48,18 +54,26 @@ tcp_probe() {
   python3 - "$HOST" "$port" <<'PY'
 import socket, sys
 host, port = sys.argv[1], int(sys.argv[2])
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(20)
+infos = []
 try:
-    s.connect((host, port))
-except OSError as e:
-    print(f"TCP {host}:{port} closed/filtered ({e})")
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+except socket.gaierror as e:
+    print(f"DNS failed for {host}: {e}")
     sys.exit(1)
-else:
-    print(f"TCP {host}:{port} open")
-    sys.exit(0)
-finally:
-    s.close()
+last_err = None
+for family, _, _, _, sockaddr in infos:
+    s = socket.socket(family, socket.SOCK_STREAM)
+    s.settimeout(12)
+    try:
+        s.connect(sockaddr)
+        print(f"TCP {sockaddr[0]}:{port} open")
+        sys.exit(0)
+    except OSError as e:
+        last_err = e
+    finally:
+        s.close()
+print(f"TCP {host}:{port} closed/filtered ({last_err})")
+sys.exit(1)
 PY
 }
 
@@ -74,42 +88,52 @@ unique_ports() {
   done
 }
 
+# Hostinger htdocs paths are usually Cloud/shared hosting → SSH port 65002.
+# VPS is usually 22. Try configured port first, then both.
 PORTS=()
 while IFS= read -r port; do
   PORTS+=("$port")
-done < <(unique_ports "${HOSTINGER_PORT:-}" "22" "65002")
+done < <(unique_ports "${HOSTINGER_PORT:-}" "65002" "22")
 
 echo "Deploy target ${USER}@${HOST} → ${ALLOWED_PATH}"
+echo "Raw HOSTINGER_HOST='${raw_host}' cleaned='${HOST}'"
 echo "SSH key: $(ssh-keygen -l -f "$KEY_FILE" 2>/dev/null || echo unknown)"
+echo "Expected public key on server:"
+ssh-keygen -y -f "$KEY_FILE" || true
 echo "Will try SSH ports: ${PORTS[*]}"
 
 PORT=""
 LAST_ERR=""
+TCP_OK_ANY=0
 for try_port in "${PORTS[@]}"; do
-  echo "Probing TCP then SSH on port ${try_port}…"
+  echo "==== Port ${try_port} ===="
   if ! tcp_probe "$try_port"; then
     continue
   fi
+  TCP_OK_ANY=1
   mapfile -t probe_opts < <(ssh_base_opts "$try_port")
   set +e
-  LAST_ERR="$(ssh "${probe_opts[@]}" "${USER}@${HOST}" "echo PREFLIGHT_SSH_OK" 2>&1)"
+  LAST_ERR="$(ssh -vv "${probe_opts[@]}" "${USER}@${HOST}" "echo PREFLIGHT_SSH_OK" 2>&1)"
   status=$?
   set -e
+  echo "$LAST_ERR" | grep -E 'PREFLIGHT_SSH_OK|Permission denied|Authentications that can continue|Connection refused|Connection timed out|No route|Authenticated|Offering public key|Server accepts key|Authentication succeeded|debug1: Next authentication' | tail -n 40 || true
   if [[ $status -eq 0 ]]; then
     PORT="$try_port"
     echo "SSH ok on port ${PORT}"
     break
   fi
   echo "Port ${try_port}: SSH failed (exit ${status})."
-  echo "$LAST_ERR" | grep -Eiv 'Warning: Permanently added' | tail -n 20 || true
 done
 
 if [[ -z "$PORT" ]]; then
   echo "::error::SSH never connected. GitHub could not log into Hostinger."
-  echo "Put this PUBLIC key into /home/${ALLOWED_USER}/.ssh/authorized_keys on the VPS:"
-  ssh-keygen -y -f "$KEY_FILE" || true
-  echo "Also confirm HOSTINGER_HOST is the VPS IP from hPanel → VPS → Overview,"
-  echo "HOSTINGER_USER is ${ALLOWED_USER}, and firewall allows SSH from the internet."
+  if [[ "$TCP_OK_ANY" -eq 0 ]]; then
+    echo "::error::No TCP port opened (tried: ${PORTS[*]}). HOSTINGER_HOST is wrong, or firewall blocks GitHub, or use the SSH hostname/IP from hPanel → Advanced → SSH Access (not just the website domain)."
+  else
+    echo "::error::TCP opened but login failed. Public key mismatch or wrong SSH user."
+    echo "::error::On server, authorized_keys must contain exactly this line:"
+    ssh-keygen -y -f "$KEY_FILE" || true
+  fi
   exit 255
 fi
 
@@ -136,4 +160,4 @@ rsync -avz --delete \
   -e "$SSH_WRAP" \
   "${ROOT}/" "${USER}@${HOST}:${ALLOWED_PATH}/"
 
-echo "Deployed to ${ALLOWED_PATH}/ only."
+echo "Deployed to ${ALLOWED_PATH}/ only (SSH port ${PORT})."

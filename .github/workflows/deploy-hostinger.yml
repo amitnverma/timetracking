@@ -5,10 +5,10 @@ name: Deploy to Hostinger
 # Nothing else on the VPS is written. config/db.local.php is never overwritten.
 #
 # Required secrets (Settings → Secrets and variables → Actions):
-#   HOSTINGER_HOST      VPS IP / hostname (hPanel → VPS → Overview)
+#   HOSTINGER_HOST      From hPanel → Advanced → SSH Access (IP or ssh hostname)
 #   HOSTINGER_SSH_KEY   Private key matching authorized_keys for cloudmosaicaissh
 # Optional:
-#   HOSTINGER_PORT      SSH port (default 22)
+#   HOSTINGER_PORT      Usually 65002 on Hostinger Cloud/shared; 22 on VPS
 #   HOSTINGER_USER      must be cloudmosaicaissh if set
 
 on:
@@ -92,8 +92,6 @@ jobs:
         run: |
           set -euo pipefail
           export HOSTINGER_SSH_KEY_FILE="$HOME/.ssh/hostinger_deploy"
-          if [[ -z "${HOSTINGER_PORT:-}" ]]; then
-            export HOSTINGER_PORT=22
-          fi
+          # Do not force port 22 — Hostinger htdocs hosting often needs 65002.
           chmod +x scripts/deploy-hostinger.sh
           scripts/deploy-hostinger.sh
