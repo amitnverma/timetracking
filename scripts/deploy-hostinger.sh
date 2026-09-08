@@ -188,7 +188,11 @@ for f in index.html api/entries.php api/db-config.php assets/js/app.js assets/cs
     exit 1
   fi
 done
-echo "Verify OK"
+# Hostinger PHP needs world-readable files; rsync --no-perms can leave 600s → HTML 403
+find "\$ALLOWED" -type d -exec chmod 755 {} \;
+find "\$ALLOWED" -type f -exec chmod 644 {} \;
+chmod 755 "\$ALLOWED/api" "\$ALLOWED/config" 2>/dev/null || true
+echo "Verify OK + permissions fixed"
 REMOTE
 
 echo "Deployed to ${ALLOWED_PATH}/ only (SSH port ${PORT})."

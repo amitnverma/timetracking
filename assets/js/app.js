@@ -958,7 +958,15 @@
 
   async function fetchDbConfig() {
     const res = await fetch(API.dbConfig, { headers: { Accept: 'application/json' } });
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(
+        `API did not return JSON (HTTP ${res.status}). Often file permissions on Hostinger. Response starts: ${text.slice(0, 80)}`
+      );
+    }
     if (!data || data.ok === false) {
       throw new Error((data && data.error) || 'Could not load DB config');
     }
@@ -1013,7 +1021,15 @@
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(
+        `API did not return JSON (HTTP ${res.status}). Fix file permissions on the server (chmod 644 PHP files). Response: ${text.slice(0, 120)}`
+      );
+    }
     if (!res.ok || data.ok === false) {
       throw new Error((data && data.error) || 'Save failed');
     }
