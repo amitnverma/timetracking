@@ -17,22 +17,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy only to time folder on Hostinger
-        uses: burnett01/rsync-deployments@7.0.2
-        with:
-          # Sync only into the target directory. Excluded remote files are not deleted.
-          switches: >-
-            -avz
-            --delete
-            --exclude .git
-            --exclude .github
-            --exclude .gitignore
-            --exclude .DS_Store
-            --exclude config/db.local.php
-            --exclude config/db.local.php.example
-          path: ./
-          remote_path: /home/cloudmosaicaissh/htdocs/cloudmosaic.ai/time/
-          remote_host: ${{ secrets.HOSTINGER_HOST }}
-          remote_user: ${{ secrets.HOSTINGER_USER }}
-          remote_key: ${{ secrets.HOSTINGER_SSH_KEY }}
-          remote_port: 22
+      - name: Check required secrets are set
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${HOSTINGER_HOST}" ]; then echo "::error::HOSTINGER_HOST secret is empty"; missing=1; else echo "HOSTINGER_HOST is set (${#HOSTINGER_HOST} chars)"; fi
+          if [ -z "${HOSTINGER_USER}" ]; then echo "::error::HOSTINGER_USER secret is empty"; missing=1; else echo "HOSTINGER_USER is set"; fi
+          if [ -z "${HOSTINGER_SSH_KEY}" ]; then echo "::error::HOSTINGER_SSH_KEY secret is empty"; missing=1; else echo "HOSTINGER_SSH_KEY is set (${#HOSTINGER_SSH_KEY} chars)"; fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Deploy only to time folder via rsync/SSH
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${HOSTINGER_PORT:-22}"
+          if [ -z "$PORT" ]; then PORT=22; fi
+          TARGET="/home/cloudmosaicaissh/htdocs/cloudmosaic.ai/time"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Write key; also fix keys pasted with literal \n characters
+          printf '%s\n' "$HOSTINGER_SSH_KEY" > ~/.ssh/hostinger_deploy
+          if grep -q '\\n' ~/.ssh/hostinger_deploy; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path.home() / '.ssh' / 'hostinger_deploy'
+          text = p.read_text()
+          if '\\n' in text and '-----BEGIN' in text:
+              p.write_text(text.replace('\\n', '\n'))
+          PY
+          fi
+          chmod 600 ~/.ssh/hostinger_deploy
+
+          # Basic key sanity check
+          if ! grep -q "BEGIN .*PRIVATE KEY" ~/.ssh/hostinger_deploy; then
+            echo "::error::HOSTINGER_SSH_KEY does not look like a private key (missing BEGIN PRIVATE KEY line). Paste the FULL private key including BEGIN/END lines."
+            exit 1
+          fi
+
+          echo "Connecting to ${HOSTINGER_USER}@${HOSTINGER_HOST}:${PORT} ..."
+          ssh-keyscan -p "$PORT" -H "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          SSH_OPTS=(-i ~/.ssh/hostinger_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p "$PORT")
+
+          if ! ssh "${SSH_OPTS[@]}" "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p '${TARGET}' && echo SSH_OK"; then
+            echo "::error::SSH failed. Check: (1) HOSTINGER_HOST IP/hostname, (2) HOSTINGER_USER, (3) public key is in ~/.ssh/authorized_keys on the VPS, (4) SSH port (default 22; set HOSTINGER_PORT secret if different)."
+            exit 1
+          fi
+
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            --exclude '.DS_Store' \
+            --exclude 'config/db.local.php' \
+            --exclude 'config/db.local.php.example' \
+            -e "ssh -i ~/.ssh/hostinger_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${PORT}" \
+            ./ "${HOSTINGER_USER}@${HOSTINGER_HOST}:${TARGET}/"
+
+          echo "Deployed to ${TARGET}/"
